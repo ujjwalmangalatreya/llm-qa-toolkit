@@ -1,0 +1,47 @@
+{
+  "name": "llm-qa-toolkit",
+  "version": "0.1.0",
+  "description": "A Playwright-based test harness for evaluating LLM applications — correctness, grounding, safety, bias, and performance. Built around Google Gemini.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:basic": "playwright test tests/basic",
+    "test:smoke": "playwright test --grep @smoke",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "report": "playwright show-report",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --ext .ts",
+    "format": "prettier --write \"**/*.{ts,json,md}\""
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@google/genai": "^1.0.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/node": "^22.10.0",
+    "@typescript-eslint/eslint-plugin": "^8.18.0",
+    "@typescript-eslint/parser": "^8.18.0",
+    "eslint": "^9.16.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2"
+  },
+  "keywords": [
+    "llm",
+    "testing",
+    "qa",
+    "playwright",
+    "gemini",
+    "google-genai",
+    "rag",
+    "evaluation",
+    "llm-as-judge",
+    "ai-quality"
+  ],
+  "license": "MIT"
+}
