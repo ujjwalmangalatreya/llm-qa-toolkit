@@ -61,6 +61,107 @@ You should see ~10 tests pass in under a minute. Each one calls the live Gemini 
 
 ---
 
+## Usage
+
+### Prerequisites
+
+- Node.js 20+
+- A Gemini API key — get one free at https://aistudio.google.com/apikey
+- Add it to `.env.local`:
+  ```
+  GEMINI_API_KEY=your-key-here
+  SIMILARITY_THRESHOLD=0.75   # optional, default for toBeSemanticallySimilar
+  GEMINI_MODEL=gemini-2.5-flash   # optional, default chat model
+  ```
+
+### Running tests
+
+```bash
+# Phase 1 smoke suite (completion, streaming, tool use, semantic similarity)
+npx playwright test --project=basic
+
+# Phase 2 docsbot tests (RAG bot sanity checks)
+npx playwright test --project=docsbot
+
+# Everything
+npm test
+
+# Filter by test name
+npx playwright test --project=docsbot -g "grounded"
+
+# Interactive UI (great for iterating on prompts / matchers)
+npm run test:ui
+
+# Open the last HTML report
+npm run report
+```
+
+Test runs cost a fraction of a cent each on the free tier. The first `docsbot` run also makes one batched embedding call to index the corpus.
+
+### Adding a new test
+
+Two patterns depending on what you're testing.
+
+**Pattern A — direct Gemini call:**
+
+```ts
+import { test, expect } from '@playwright/test';
+import { ask } from '../../src/clients/gemini.js';
+import '../../src/matchers/index.js';
+
+test('my new test', async () => {
+  const answer = await ask('your prompt here');
+  await expect(answer).toBeSemanticallySimilar('expected meaning');
+});
+```
+
+Drop the file into `tests/basic/` and it runs under the `basic` project.
+
+**Pattern B — testing the docsbot:**
+
+```ts
+import { test, expect } from '@playwright/test';
+import { DocsBot } from '../../src/docsbot/index.js';
+import '../../src/matchers/index.js';
+
+const bot = new DocsBot();
+
+test.beforeAll(async () => { await bot.init(); });
+
+test('my docsbot test', async () => {
+  const { answer, retrievedChunks } = await bot.ask('your question');
+  // assert on answer (semantic) and/or retrievedChunks (grounding)
+});
+```
+
+Drop the file into `tests/docsbot/`.
+
+### Adding a new test category
+
+Two steps:
+
+1. Create `tests/<your-category>/` and drop spec files in it.
+2. Register the project in `playwright.config.ts`:
+   ```ts
+   { name: '<your-category>', testDir: './tests/<your-category>', testMatch: '**/*.spec.ts' }
+   ```
+
+### Adding a doc to the docsbot corpus
+
+Drop a new `.md` file in `src/docsbot/corpus/`. The loader picks it up automatically — no code changes needed. Paragraphs (separated by blank lines) become chunks.
+
+### When a test fails
+
+The `list` reporter prints the failure inline. For richer info:
+
+```bash
+npm run report
+```
+
+Opens an HTML report at `playwright-report/` with the prompt, response, assertion error, and any traces. For semantic-similarity failures the matcher shows the computed cosine score and a truncated diff of both strings — usually enough to tell whether the prompt drifted or the threshold needs tuning.
+
+---
+
 ## What the tests look like
 
 ### Plain assertion against a model response
@@ -125,15 +226,22 @@ llm-qa-toolkit/
 │   ├── matchers/
 │   │   ├── toBeSemanticallySimilar.ts
 │   │   └── index.ts            # Registers all matchers
-│   └── utils/
-│       └── similarity.ts       # Cosine similarity
+│   ├── utils/
+│   │   └── similarity.ts       # Cosine similarity
+│   └── docsbot/                # Phase 2: reference RAG bot under test
+│       ├── corpus/             # Hand-written Playwright docs (md)
+│       ├── loader.ts           # Reads + chunks the markdown
+│       ├── retriever.ts        # Embedding-based top-K retrieval
+│       └── bot.ts              # DocsBot.ask() → {answer, retrievedChunks}
 ├── tests/
-│   └── basic/                  # Phase 1: 5 working tests against Gemini
-│       ├── completion.spec.ts
-│       ├── deterministic.spec.ts
-│       ├── semantic-similarity.spec.ts
-│       ├── streaming.spec.ts
-│       └── tool-use.spec.ts
+│   ├── basic/                  # Phase 1: 5 working tests against Gemini
+│   │   ├── completion.spec.ts
+│   │   ├── deterministic.spec.ts
+│   │   ├── semantic-similarity.spec.ts
+│   │   ├── streaming.spec.ts
+│   │   └── tool-use.spec.ts
+│   └── docsbot/                # Phase 2: sanity tests for docsbot-demo
+│       └── docsbot.spec.ts
 ├── .github/workflows/
 │   └── pr-smoke.yml            # CI: runs the smoke suite on every PR
 ├── playwright.config.ts
@@ -142,5 +250,107 @@ llm-qa-toolkit/
 ```
 
 ---
+
+## docsbot-demo — the reference system under test (Phase 2)
+
+A working LLM toolkit needs a working LLM application to test against. `docsbot-demo` is that target: a small **RAG (Retrieval-Augmented Generation) chatbot** that answers questions about Playwright using a hand-curated corpus. It lives inside this repo at [src/docsbot/](src/docsbot/) so every later phase can point its tests at it.
+
+### What it does
+
+Ask the bot a Playwright question, and it:
+
+1. **Embeds your question** with `gemini-embedding-001` (task type `RETRIEVAL_QUERY`).
+2. **Searches the corpus** by cosine similarity, returning the top 3 most relevant chunks.
+3. **Builds a context-stuffed prompt** containing only those chunks, plus a strict system prompt: *"answer ONLY from these snippets; if they don't cover it, say 'I don't know based on the provided documentation.'"*
+4. **Calls `gemini-2.5-flash`** and returns both the answer **and** the retrieved chunks — so test code can verify grounding, not just text quality.
+
+### The pieces
+
+| File | Job | Size |
+| ---- | --- | ---- |
+| [corpus/*.md](src/docsbot/corpus/) | 4 Playwright topic docs: selectors, assertions, fixtures, test runner | ~80 lines total |
+| [loader.ts](src/docsbot/loader.ts) | Reads the markdown files, splits each into paragraph-level `Chunk`s | ~30 lines |
+| [retriever.ts](src/docsbot/retriever.ts) | Embeds all chunks once, then ranks them by cosine similarity to a query | ~40 lines |
+| [bot.ts](src/docsbot/bot.ts) | `DocsBot` class — `.init()` to index, `.ask(question)` to query | ~50 lines |
+| [docsbot.spec.ts](tests/docsbot/docsbot.spec.ts) | 2 sanity tests: grounded answer + off-corpus refusal | ~30 lines |
+
+### Data flow
+
+```
+corpus/*.md
+    │
+    ▼
+loader.ts ──→  Chunk[]   (paragraph-sized pieces, tagged with docId)
+    │
+    ▼
+retriever.ts ──→  vectors[]   (embedded ONCE on init)
+
+  ── user asks a question ──
+
+retriever.ts ──→  top-K chunks   (cosine similarity vs question embedding)
+    │
+    ▼
+bot.ts ──→  prompt = [system: "answer only from snippets"]
+                    + [user: snippets + question]
+    │
+    ▼
+gemini-2.5-flash
+    │
+    ▼
+{ answer, retrievedChunks }
+```
+
+That `retrievedChunks` in the return value is intentional — Phase 3 (grounding, citations) will use it to verify *"every claim in the answer is supported by these chunks."*
+
+### Running it
+
+```bash
+# Just the docsbot tests (~9 seconds, one batched embedding call + 2 ask() calls)
+npx playwright test --project=docsbot
+
+# Everything (basic + docsbot)
+npm test
+```
+
+### What the tests prove
+
+```ts
+test('answers a question grounded in the corpus', async () => {
+  const { answer, retrievedChunks } = await bot.ask(
+    'How do I make a test in one file run in parallel?'
+  );
+
+  expect(retrievedChunks[0].docId).toBe('test-runner');   // right doc retrieved
+  await expect(answer).toBeSemanticallySimilar(            // right answer given
+    "Add test.describe.configure({ mode: 'parallel' }) at the top of the file.",
+    { threshold: 0.7 }
+  );
+});
+
+test('refuses to answer a question not covered by the corpus', async () => {
+  const { answer } = await bot.ask('What is the best recipe for chocolate chip cookies?');
+  expect(answer.toLowerCase()).toContain("don't know");
+});
+```
+
+Two sanity checks: the **happy path** (right retrieval + right answer) and the **out-of-scope refusal**. Later phases extend this with hallucination tests, citation verification, prompt-injection attacks, and a regression dashboard.
+
+
+
+---
+
+## Roadmap
+
+This is a multi-phase build. Each phase adds a new dimension of LLM quality:
+
+| Phase | Theme                                  | Status      |
+| ----- | -------------------------------------- | ----------- |
+| 1     | Scaffold + smoke tests vs. Gemini      | ✅ shipped   |
+| 2     | `docsbot-demo` system under test       | ✅ shipped   |
+| 3     | Correctness, grounding, citations      | ⏳ planned  |
+| 4     | Safety, prompt injection, red teaming  | ⏳ planned  |
+| 5     | `docsbot-demo` v2 hardened             | ⏳ planned  |
+| 6     | Trend dashboard + nightly CI           | ⏳ planned  |
+| 7     | Polish + launch                        | ⏳ planned  |
 
 

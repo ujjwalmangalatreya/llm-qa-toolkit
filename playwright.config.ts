@@ -28,6 +28,11 @@ export default defineConfig({
       testDir: './tests/basic',
     },
     {
+      name: 'docsbot',
+      testDir: './tests/docsbot',
+      testMatch: '**/*.spec.ts',
+    },
+    {
       name: 'correctness',
       testDir: './tests/correctness',
       testMatch: '**/*.spec.ts',
