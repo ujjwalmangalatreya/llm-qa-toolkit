@@ -222,9 +222,12 @@ See [tests/basic/](tests/basic/) for all five working examples.
 llm-qa-toolkit/
 ├── src/
 │   ├── clients/
-│   │   └── gemini.ts           # Singleton Gemini client + ask() + embed() helpers
+│   │   ├── gemini.ts           # Singleton Gemini client + ask() + embed() (with 429 retry)
+│   │   └── judge.ts            # Phase 3: LLM-as-judge for grounding verdicts
 │   ├── matchers/
 │   │   ├── toBeSemanticallySimilar.ts
+│   │   ├── toBeGroundedIn.ts        # Phase 3: judge-backed grounding check
+│   │   ├── toHaveValidCitations.ts  # Phase 3: validates [chunkId] citations
 │   │   └── index.ts            # Registers all matchers
 │   ├── utils/
 │   │   └── similarity.ts       # Cosine similarity
@@ -240,8 +243,13 @@ llm-qa-toolkit/
 │   │   ├── semantic-similarity.spec.ts
 │   │   ├── streaming.spec.ts
 │   │   └── tool-use.spec.ts
-│   └── docsbot/                # Phase 2: sanity tests for docsbot-demo
-│       └── docsbot.spec.ts
+│   ├── docsbot/                # Phase 2: sanity tests for docsbot-demo
+│   │   └── docsbot.spec.ts
+│   └── correctness/            # Phase 3: eval, grounding, citations
+│       ├── eval-set.json       # 10 curated Q&A pairs across the corpus
+│       ├── correctness.spec.ts # Loops the eval set, semantic-similarity per case
+│       ├── grounding.spec.ts   # toBeGroundedIn — positive + negative test
+│       └── citations.spec.ts   # toHaveValidCitations — no-LLM + real-bot tests
 ├── .github/workflows/
 │   └── pr-smoke.yml            # CI: runs the smoke suite on every PR
 ├── playwright.config.ts
@@ -335,7 +343,74 @@ test('refuses to answer a question not covered by the corpus', async () => {
 
 Two sanity checks: the **happy path** (right retrieval + right answer) and the **out-of-scope refusal**. Later phases extend this with hallucination tests, citation verification, prompt-injection attacks, and a regression dashboard.
 
+---
 
+## Correctness, grounding, citations (Phase 3)
+
+Phase 2 proved the bot answers. Phase 3 starts proving the bot tells the *truth* — and tells you *where the truth came from*. Three new things land here:
+
+### 1. Eval dataset + correctness suite
+
+A curated set of Q&A pairs the bot must answer correctly. Lives at [tests/correctness/eval-set.json](tests/correctness/eval-set.json) — currently 10 questions across the four corpus docs. Each entry:
+
+```json
+{
+  "id": "runner-parallel",
+  "question": "How do I make tests within a single file run in parallel?",
+  "expected": "Add test.describe.configure({ mode: 'parallel' }) at the top of the file.",
+  "expectedDocId": "test-runner"
+}
+```
+
+[correctness.spec.ts](tests/correctness/correctness.spec.ts) loops the dataset and runs two checks per case:
+- The right doc was retrieved (`expectedDocId` shows up in `retrievedChunks`)
+- The bot's answer is semantically similar to `expected` (threshold 0.7)
+
+This is your **regression net**. When someone tweaks the system prompt or you upgrade the model, you'll see immediately whether quality moved.
+
+### 2. Grounding — `toBeGroundedIn` (LLM-as-judge)
+
+The hallucination guard. A new matcher in [src/matchers/toBeGroundedIn.ts](src/matchers/toBeGroundedIn.ts) sends the bot's answer + retrieved chunks to a **second Gemini call** ([src/clients/judge.ts](src/clients/judge.ts)) whose only job is to grade whether every factual claim in the answer is supported by the snippets. It returns structured JSON:
+
+```ts
+{ grounded: true, unsupportedClaims: [] }
+// or
+{ grounded: false, unsupportedClaims: ["Claim X has no support in the snippets."] }
+```
+
+[grounding.spec.ts](tests/correctness/grounding.spec.ts) has two tests:
+- **Positive:** a real bot answer should be grounded in its own retrieved chunks
+- **Negative:** a hand-crafted hallucinated answer should be *rejected* — proves the judge isn't rubber-stamping everything
+
+The negative test is the important one. Without it, a too-lenient judge looks indistinguishable from a working one.
+
+### 3. Citations — `toHaveValidCitations`
+
+The bot's system prompt was updated in this phase to require inline citations like `[fixtures#0]` after every claim. The new matcher in [src/matchers/toHaveValidCitations.ts](src/matchers/toHaveValidCitations.ts) extracts those citation tags and asserts every one resolves to a chunk that was actually retrieved. Pure regex + set lookup — no LLM call, runs in milliseconds.
+
+[citations.spec.ts](tests/correctness/citations.spec.ts) covers both:
+- **No-LLM tests** that exercise the matcher logic directly (fast, free)
+- **Real-bot test** that asks a question and verifies the actual answer's citations are valid
+
+### Running it
+
+```bash
+# Phase 3 suite — the rate-limit-aware way to run it on the free tier
+npx playwright test --project=correctness --workers=1 --retries=0
+```
+
+The `--workers=1` matters: 10 correctness tests + 5 grounding/citation tests is a lot of embed + chat calls. The free tier allows ~100 embed RPM and ~15 flash RPM. Parallel workers and Playwright's auto-retries blow through both. Serial execution + the 429 retry-with-backoff in [gemini.ts](src/clients/gemini.ts) keeps you under quota.
+
+### Bonus: 429 retry-with-backoff
+
+Because Phase 3 multiplies the number of LLM calls per test (retrieval + answer + judge + similarity), every API call in [src/clients/gemini.ts](src/clients/gemini.ts) and [src/clients/judge.ts](src/clients/judge.ts) is now wrapped in a `withRateLimitRetry` helper. It catches `RESOURCE_EXHAUSTED` errors, reads the API's own `retryDelay` value, sleeps that long, and tries again (up to 4 attempts). Falls back to exponential backoff if no delay is provided.
+
+This is the kind of plumbing that becomes essential the moment you have an eval suite.
+
+### What this sets up
+
+- **Phase 4 (safety)** plugs in here naturally — adversarial questions go through the same pipeline, and `toBeGroundedIn` is exactly the matcher that catches injection-induced hallucinations.
+- **Phase 6 (dashboard)** consumes `correctness.spec.ts` directly — every test produces a similarity score that becomes a trend line.
 
 ---
 
@@ -347,7 +422,7 @@ This is a multi-phase build. Each phase adds a new dimension of LLM quality:
 | ----- | -------------------------------------- | ----------- |
 | 1     | Scaffold + smoke tests vs. Gemini      | ✅ shipped   |
 | 2     | `docsbot-demo` system under test       | ✅ shipped   |
-| 3     | Correctness, grounding, citations      | ⏳ planned  |
+| 3     | Correctness, grounding, citations      | ✅ shipped   |
 | 4     | Safety, prompt injection, red teaming  | ⏳ planned  |
 | 5     | `docsbot-demo` v2 hardened             | ⏳ planned  |
 | 6     | Trend dashboard + nightly CI           | ⏳ planned  |

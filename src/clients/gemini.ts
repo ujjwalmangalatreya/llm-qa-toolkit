@@ -40,15 +40,17 @@ export interface AskOptions {
 export async function ask(prompt: string, options: AskOptions = {}): Promise<string> {
   const client = getGeminiClient();
 
-  const response = await client.models.generateContent({
-    model: options.model ?? DEFAULT_MODEL,
-    contents: prompt,
-    config: {
-      systemInstruction: options.system,
-      temperature: options.temperature ?? 0,
-      maxOutputTokens: options.maxTokens ?? 1024,
-    },
-  });
+  const response = await withRateLimitRetry(() =>
+    client.models.generateContent({
+      model: options.model ?? DEFAULT_MODEL,
+      contents: prompt,
+      config: {
+        systemInstruction: options.system,
+        temperature: options.temperature ?? 0,
+        maxOutputTokens: options.maxTokens ?? 1024,
+      },
+    })
+  );
 
   const text = response.text;
   if (!text) {
@@ -63,15 +65,17 @@ export async function ask(prompt: string, options: AskOptions = {}): Promise<str
 export async function askRaw(prompt: string, options: AskOptions = {}) {
   const client = getGeminiClient();
 
-  return client.models.generateContent({
-    model: options.model ?? DEFAULT_MODEL,
-    contents: prompt,
-    config: {
-      systemInstruction: options.system,
-      temperature: options.temperature ?? 0,
-      maxOutputTokens: options.maxTokens ?? 1024,
-    },
-  });
+  return withRateLimitRetry(() =>
+    client.models.generateContent({
+      model: options.model ?? DEFAULT_MODEL,
+      contents: prompt,
+      config: {
+        systemInstruction: options.system,
+        temperature: options.temperature ?? 0,
+        maxOutputTokens: options.maxTokens ?? 1024,
+      },
+    })
+  );
 }
 
 export type EmbeddingTaskType =
@@ -94,11 +98,13 @@ export async function embed(
   const client = getGeminiClient();
   const texts = Array.isArray(input) ? input : [input];
 
-  const response = await client.models.embedContent({
-    model: DEFAULT_EMBEDDING_MODEL,
-    contents: texts,
-    config: { taskType },
-  });
+  const response = await withRateLimitRetry(() =>
+    client.models.embedContent({
+      model: DEFAULT_EMBEDDING_MODEL,
+      contents: texts,
+      config: { taskType },
+    })
+  );
 
   if (!response.embeddings) {
     throw new Error('Gemini returned no embedding data');
@@ -108,6 +114,26 @@ export async function embed(
     if (!e.values) throw new Error('Gemini returned an embedding without vector data');
     return e.values;
   });
+}
+
+// Free tier quotas (100 RPM embed, ~15 RPM flash) get exhausted by bursty
+// test suites. Honor the retryDelay the API tells us, fall back to expo backoff.
+export async function withRateLimitRetry<T>(fn: () => Promise<T>, maxAttempts = 4): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fn();
+    } catch (err) {
+      attempt++;
+      const msg = err instanceof Error ? err.message : String(err);
+      const is429 = msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED');
+      if (!is429 || attempt >= maxAttempts) throw err;
+
+      const m = msg.match(/"retryDelay":\s*"(\d+(?:\.\d+)?)s"/);
+      const waitMs = m ? Math.ceil(parseFloat(m[1]) * 1000) + 500 : 2 ** attempt * 1000;
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
+  }
 }
 
 /**

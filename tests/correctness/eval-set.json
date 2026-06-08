@@ -1,0 +1,62 @@
+[
+  {
+    "id": "selectors-role",
+    "question": "Which locator should I prefer when targeting a Submit button by its accessible name?",
+    "expected": "Use getByRole with role 'button' and the accessible name, e.g. getByRole('button', { name: 'Submit' }).",
+    "expectedDocId": "selectors"
+  },
+  {
+    "id": "selectors-testid",
+    "question": "How do I select an element by its data-testid attribute?",
+    "expected": "Use page.getByTestId(testId) to locate elements by their data-testid attribute.",
+    "expectedDocId": "selectors"
+  },
+  {
+    "id": "selectors-chaining",
+    "question": "How can I narrow a locator down by text content?",
+    "expected": "Chain .filter({ hasText: 'some text' }) onto the locator to narrow the match.",
+    "expectedDocId": "selectors"
+  },
+  {
+    "id": "assertions-visible",
+    "question": "What assertion checks whether an element is visible?",
+    "expected": "Use expect(locator).toBeVisible() — it auto-waits until the element is visible or the timeout expires.",
+    "expectedDocId": "assertions"
+  },
+  {
+    "id": "assertions-soft",
+    "question": "How do I record an assertion failure without stopping the test?",
+    "expected": "Use expect.soft(...) — it records the failure but lets the test continue executing.",
+    "expectedDocId": "assertions"
+  },
+  {
+    "id": "assertions-timeout",
+    "question": "What is the default expect timeout in Playwright?",
+    "expected": "The default expect timeout is 5 seconds.",
+    "expectedDocId": "assertions"
+  },
+  {
+    "id": "fixtures-beforeeach",
+    "question": "Which hook runs before every test in a file?",
+    "expected": "test.beforeEach runs before every test in the file.",
+    "expectedDocId": "fixtures"
+  },
+  {
+    "id": "fixtures-scope",
+    "question": "How do I make a fixture shared across all tests in a worker?",
+    "expected": "Set the fixture's scope to 'worker' so the same instance is reused across all tests in that worker.",
+    "expectedDocId": "fixtures"
+  },
+  {
+    "id": "runner-parallel",
+    "question": "How do I make tests within a single file run in parallel?",
+    "expected": "Add test.describe.configure({ mode: 'parallel' }) at the top of the file.",
+    "expectedDocId": "test-runner"
+  },
+  {
+    "id": "runner-sharding",
+    "question": "How do I split a large test suite across multiple machines?",
+    "expected": "Use --shard=N/M, where N is the current shard and M is the total number of shards.",
+    "expectedDocId": "test-runner"
+  }
+]

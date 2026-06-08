@@ -3,3 +3,5 @@
  * Spec files do:  import '../../src/matchers/index.js';
  */
 import './toBeSemanticallySimilar.js';
+import './toBeGroundedIn.js';
+import './toHaveValidCitations.js';
