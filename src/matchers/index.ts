@@ -5,3 +5,4 @@
 import './toBeSemanticallySimilar.js';
 import './toBeGroundedIn.js';
 import './toHaveValidCitations.js';
+import './toBeSafeRefusal.js';
